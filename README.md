@@ -1,5 +1,5 @@
 # qianfen-heater-api
-成都前锋热水器APP破解，使用API进行热水器设置
+成都前锋热水器APP破解(REA + Deepseek Harness)，使用API进行热水器设置
 
 
 我使用一台红米手机，安装了termux,执行 heater_api_daemon.sh
