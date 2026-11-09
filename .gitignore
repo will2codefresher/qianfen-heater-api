@@ -216,6 +216,9 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
+# Local device credentials (heater_lan.py)
+config.ini
+
 # Streamlit
 .streamlit/secrets.toml
 /.idea/inspectionProfiles/profiles_settings.xml

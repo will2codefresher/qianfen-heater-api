@@ -29,11 +29,15 @@
     python heater_lan.py status --sn ... --pwd ...
     python heater_lan.py power  --sn ... --pwd ...          # 切换一次
     python heater_lan.py cycle  --sn ... --pwd ...          # 关→开，最终保证开
+
+SN 与密码缺省从同目录 config.ini 的 [heater] 分组读取；首次运行（无配置文件或字段为空）
+会提示输入，并自动写回 config.ini。
 """
 
 from __future__ import annotations
 
 import argparse
+import configparser
 import hashlib
 import json
 import os
@@ -46,8 +50,59 @@ from typing import Optional, Tuple
 
 DEFAULT_HOST = "192.168.3.83"
 DEFAULT_PORT = 1194
-DEFAULT_SN = 826000023150
-DEFAULT_PWD = "td1234567"
+
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.ini")
+CONFIG_SECTION = "heater"
+
+
+def load_config(path: str = CONFIG_PATH) -> dict:
+    """读取 config.ini 里的 sn/pwd；文件或字段缺失时返回空字符串。"""
+    parser = configparser.ConfigParser()
+    parser.read(path, encoding="utf-8")
+    return {
+        "sn": parser.get(CONFIG_SECTION, "sn", fallback="").strip(),
+        "pwd": parser.get(CONFIG_SECTION, "pwd", fallback="").strip(),
+    }
+
+
+def save_config(sn, pwd, path: str = CONFIG_PATH) -> None:
+    """把 sn/pwd 写回 config.ini（保留文件里其它分组）。"""
+    parser = configparser.ConfigParser()
+    parser.read(path, encoding="utf-8")
+    if not parser.has_section(CONFIG_SECTION):
+        parser.add_section(CONFIG_SECTION)
+    parser.set(CONFIG_SECTION, "sn", str(sn))
+    parser.set(CONFIG_SECTION, "pwd", str(pwd))
+    with open(path, "w", encoding="utf-8") as fp:
+        parser.write(fp)
+
+
+def resolve_credentials(sn: Optional[str] = None, pwd: Optional[str] = None) -> Tuple[str, str]:
+    """按 参数 > 环境变量 > config.ini > 交互输入 的顺序取 SN 和密码。
+
+    拿到的值写回 config.ini：配置文件不存在、或本次是用户手工输入时都会保存。
+    """
+    cfg = load_config()
+    missing_file = not os.path.exists(CONFIG_PATH)
+    prompted = False
+    if not sn:
+        sn = cfg["sn"]
+    if not pwd:
+        pwd = os.environ.get("HEATER_PWD", "") or cfg["pwd"]
+    if not sn:
+        sn = input("未找到设备 SN，请输入: ").strip()
+        prompted = True
+    if not pwd:
+        pwd = input("未找到设备密码，请输入: ").strip()
+        prompted = True
+    if sn and pwd and (prompted or missing_file):
+        save_config(sn, pwd)
+    return sn, pwd
+
+
+_CFG = load_config()
+DEFAULT_SN = _CFG["sn"]
+DEFAULT_PWD = _CFG["pwd"]
 
 TAIL8 = bytes.fromhex("07ea0b050e3a1008")
 CONST_A = bytes.fromhex("f2ddf0383b1738a7ffffffff9d90ab29")
@@ -99,7 +154,7 @@ def build_header(seq: int, session: int, cmd: int, payload_len: int) -> bytes:
 class Heater:
     host: str = DEFAULT_HOST
     port: int = DEFAULT_PORT
-    sn: int = DEFAULT_SN
+    sn: int | str = DEFAULT_SN
     pwd: str = DEFAULT_PWD
     timeout: float = 2.0
 
@@ -460,8 +515,8 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="前锋热水器局域网直连客户端")
     p.add_argument("--host", default=os.environ.get("HEATER_HOST", DEFAULT_HOST))
     p.add_argument("--port", type=int, default=DEFAULT_PORT)
-    p.add_argument("--sn", type=int, default=DEFAULT_SN)
-    p.add_argument("--pwd", default=os.environ.get("HEATER_PWD", DEFAULT_PWD))
+    p.add_argument("--sn", default=DEFAULT_SN, help="设备 SN（缺省读 config.ini，缺失时提示输入）")
+    p.add_argument("--pwd", default=None, help="设备密码（缺省读 config.ini / HEATER_PWD，缺失时提示输入）")
     p.add_argument("--timeout", type=float, default=2.0)
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("pair", help="登录并打印设备信息")
@@ -471,7 +526,8 @@ def main(argv=None) -> int:
     sub.add_parser("cycle", help="关->开，最终保证开机")
     args = p.parse_args(argv)
 
-    h = Heater(args.host, args.port, args.sn, args.pwd, args.timeout)
+    sn, pwd = resolve_credentials(args.sn, args.pwd)
+    h = Heater(args.host, args.port, int(sn), pwd, args.timeout)
     try:
         info = h.login()
         if args.cmd == "pair":
@@ -488,7 +544,7 @@ def main(argv=None) -> int:
         elif args.cmd == "cycle":
             h.cycle(); print("cycle done (off -> on)")
         return 0
-    except (HeaterError, socket.timeout, OSError) as exc:
+    except (HeaterError, ValueError, socket.timeout, OSError) as exc:
         print("error:", exc, file=sys.stderr)
         return 1
     finally:
